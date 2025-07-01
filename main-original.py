@@ -17,7 +17,6 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import structlog
-import os
 
 from config import settings, AI_MODEL_CONFIGS, EBOOK_FORMATS
 from services.ai_integration import AIService
@@ -97,7 +96,7 @@ async def lifespan(app: FastAPI):
     if text_processor:
         await text_processor.cleanup()
 
-from fastapi.staticfiles import StaticFiles
+
 # Initialize FastAPI app
 app = FastAPI(
     title=settings.APP_NAME,
@@ -107,13 +106,6 @@ app = FastAPI(
     redoc_url="/redoc" if settings.DEBUG else None,
     lifespan=lifespan
 )
-from fastapi.staticfiles import StaticFiles
-# 1) Serve your React build at the root
-build_dir = os.path.join(os.path.dirname(__file__), "frontend", "build")
-app.mount("/", StaticFiles(directory=build_dir, html=True), name="frontend")
-
-# 2) (Optional) If you still want to serve old /static assets separately:
-# app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 
 # Add middleware
 app.add_middleware(

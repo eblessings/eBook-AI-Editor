@@ -10,3 +10,5 @@ venv/
 .DS_Store
 # Logs
 *.log
+#models
+model_cache/

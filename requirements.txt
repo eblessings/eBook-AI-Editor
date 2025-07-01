@@ -9,7 +9,7 @@ python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 
 # eBook Processing Libraries
-ebooklib>=0.20
+ebooklib>=0.17,<0.20
 PyMuPDF>=1.26.1
 mammoth>=1.9.1
 python-docx>=1.1.2
@@ -55,15 +55,15 @@ structlog>=25.1.0
 prometheus-client>=0.21.0
 
 # Additional eBook Format Support
-epub-meta>=0.1.0
-calibre>=7.0.0  # Optional: for advanced format conversion
+epub-meta>=0.0.6,<0.1.0
+
 
 # Background Task Processing
 celery>=5.4.0
 redis>=5.1.0
 
 # File Processing Enhancement
-python-magic-bin>=0.4.14  # For Windows compatibility
+
 chardet>=5.2.0
 
 # Security

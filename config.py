@@ -5,7 +5,8 @@ Handles environment variables, AI model settings, and application configuration.
 
 import os
 from typing import Optional, List, Literal
-from pydantic import BaseSettings, Field, validator
+from pydantic_settings import BaseSettings
+from pydantic import Field, validator
 from pathlib import Path
 
 
@@ -21,7 +22,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: Literal["development", "staging", "production"] = Field(
         default="development", env="ENVIRONMENT"
     )
-    
+    RELOAD: bool = Field(default=False) 
     # CORS Configuration
     CORS_ORIGINS: List[str] = Field(
         default=["http://localhost:3000", "http://localhost:8080", "http://127.0.0.1:3000"],
