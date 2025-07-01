@@ -63,6 +63,11 @@ eBook Editor Pro is a comprehensive, AI-powered platform for creating profession
 # Clone the repository
 git clone https://github.com/your-username/ebook-editor-pro.git
 cd ebook-editor-pro
+sudo apt update
+sudo apt install libxcb-cursor0
+wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
+sudo apt install libmagic1 libmagic-dev
+
 
 # Run the automated setup
 python start_server.py --setup
