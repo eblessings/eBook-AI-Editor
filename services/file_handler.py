@@ -1,7 +1,7 @@
 """
-File Handler Service for the eBook Editor.
+Fixed File Handler Service for the eBook Editor.
 Handles file uploads, text extraction from various formats, and file processing.
-Supports DOCX, PDF, EPUB, TXT, HTML, and Markdown files.
+Supports DOCX, PDF, EPUB, TXT, HTML, and Markdown files with improved error handling.
 """
 
 import asyncio
@@ -11,23 +11,48 @@ import mimetypes
 import os
 import tempfile
 import uuid
+import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional, Any, BinaryIO, Union
 import aiofiles
-import magic
 import chardet
 from urllib.parse import urlparse
 
 # File processing libraries
-import mammoth
-import fitz  # PyMuPDF
-from ebooklib import epub
-import ebooklib
+try:
+    import mammoth
+except ImportError:
+    mammoth = None
+
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    fitz = None
+
+try:
+    from ebooklib import epub
+    import ebooklib
+except ImportError:
+    epub = None
+    ebooklib = None
+
 from bs4 import BeautifulSoup
-import docx2txt
-from docx import Document
-import zipfile
+
+try:
+    import docx2txt
+    from docx import Document
+except ImportError:
+    docx2txt = None
+    Document = None
+
+try:
+    import magic
+except ImportError:
+    magic = None
+
 import structlog
+import re
 
 from config import Settings
 
@@ -35,7 +60,7 @@ logger = structlog.get_logger()
 
 
 class FileHandler:
-    """Professional file handler with multi-format support."""
+    """Enhanced file handler with multi-format support and better error handling."""
     
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -48,7 +73,7 @@ class FileHandler:
         Path(self.settings.EXPORT_DIR).mkdir(parents=True, exist_ok=True)
     
     async def extract_text_from_file(self, file) -> Dict[str, Any]:
-        """Extract text content from uploaded file."""
+        """Extract text content from uploaded file with enhanced error handling."""
         try:
             logger.info("Extracting text from file", 
                        filename=file.filename, 
@@ -107,17 +132,37 @@ class FileHandler:
             
         except Exception as e:
             logger.error("Text extraction failed", 
-                        filename=file.filename, 
+                        filename=getattr(file, 'filename', 'unknown'), 
                         error=str(e))
             raise
     
     def _detect_content_type(self, content: bytes, filename: str) -> str:
         """Detect actual content type using multiple methods."""
         try:
-            # Try python-magic first
-            detected_mime = magic.from_buffer(content, mime=True)
-            if detected_mime and detected_mime != 'application/octet-stream':
-                return detected_mime
+            # Check file signatures first
+            if content.startswith(b'PK\x03\x04'):
+                # ZIP-based format
+                if self._is_docx(content):
+                    return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                elif b'epub' in content[:1024].lower():
+                    return 'application/epub+zip'
+                else:
+                    return 'application/zip'
+            elif content.startswith(b'%PDF'):
+                return 'application/pdf'
+            elif content.startswith((b'\xff\xfe', b'\xfe\xff', b'\xef\xbb\xbf')):
+                return 'text/plain'  # UTF encoded text
+            elif content.startswith(b'<!DOCTYPE html') or content.startswith(b'<html'):
+                return 'text/html'
+        except:
+            pass
+        
+        # Try python-magic if available
+        try:
+            if magic:
+                detected_mime = magic.from_buffer(content, mime=True)
+                if detected_mime and detected_mime != 'application/octet-stream':
+                    return detected_mime
         except:
             pass
         
@@ -126,19 +171,16 @@ class FileHandler:
         if mime_type:
             return mime_type
         
-        # Check file signatures
-        if content.startswith(b'PK\x03\x04'):
-            if b'word/' in content[:1024]:
-                return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-            elif b'epub' in content[:1024].lower():
-                return 'application/epub+zip'
-        elif content.startswith(b'%PDF'):
-            return 'application/pdf'
-        elif content.startswith(b'\xff\xfe') or content.startswith(b'\xfe\xff'):
-            return 'text/plain'  # UTF-16 text
-        
         # Default fallback
         return 'application/octet-stream'
+    
+    def _is_docx(self, content: bytes) -> bool:
+        """Check if ZIP content is a DOCX file."""
+        try:
+            with zipfile.ZipFile(io.BytesIO(content), 'r') as zip_file:
+                return 'word/document.xml' in zip_file.namelist()
+        except:
+            return False
     
     async def _save_temp_file(self, content: bytes, file_id: str, filename: str) -> str:
         """Save content to temporary file."""
@@ -164,11 +206,11 @@ class FileHandler:
     
     async def _extract_by_type(self, content: bytes, temp_path: str, 
                               content_type: str, filename: str) -> Dict[str, Any]:
-        """Extract text based on content type."""
+        """Extract text based on content type with enhanced error handling."""
         try:
             # Route to appropriate extraction method
             if content_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-                return await self._extract_from_docx(temp_path)
+                return await self._extract_from_docx(temp_path, content)
             elif content_type == 'application/pdf':
                 return await self._extract_from_pdf(temp_path)
             elif content_type == 'application/epub+zip':
@@ -190,69 +232,159 @@ class FileHandler:
             # Fallback to basic text extraction
             return await self._extract_from_text(content)
     
-    async def _extract_from_docx(self, file_path: str) -> Dict[str, Any]:
-        """Extract text from DOCX file."""
+    async def _extract_from_docx(self, file_path: str, content: bytes = None) -> Dict[str, Any]:
+        """Extract text from DOCX file with multiple fallback methods."""
         try:
             logger.debug("Extracting from DOCX")
             
-            # Use mammoth for better HTML conversion
-            with open(file_path, 'rb') as docx_file:
-                result = mammoth.convert_to_html(docx_file)
-                html_content = result.value
-                
-                # Convert HTML to plain text while preserving structure
-                soup = BeautifulSoup(html_content, 'html.parser')
-                text_content = soup.get_text('\n\n', strip=True)
+            # Method 1: Try mammoth for best formatting
+            if mammoth:
+                try:
+                    with open(file_path, 'rb') as docx_file:
+                        result = mammoth.convert_to_html(docx_file)
+                        html_content = result.value
+                        
+                        # Convert HTML to plain text while preserving structure
+                        soup = BeautifulSoup(html_content, 'html.parser')
+                        text_content = soup.get_text('\n\n', strip=True)
+                        
+                        if text_content and len(text_content.strip()) > 0:
+                            logger.debug("Successfully extracted using mammoth")
+                            return {
+                                'text': text_content,
+                                'metadata': {},
+                                'structure': {'extraction_method': 'mammoth'},
+                                'method': 'mammoth',
+                                'html_content': html_content
+                            }
+                except Exception as e:
+                    logger.warning("Mammoth extraction failed", error=str(e))
             
-            # Also extract metadata using python-docx
+            # Method 2: Try python-docx for metadata
+            if Document:
+                try:
+                    doc = Document(file_path)
+                    
+                    # Extract text from paragraphs
+                    paragraphs = []
+                    for para in doc.paragraphs:
+                        if para.text.strip():
+                            paragraphs.append(para.text.strip())
+                    
+                    text_content = '\n\n'.join(paragraphs)
+                    
+                    if text_content and len(text_content.strip()) > 0:
+                        # Extract metadata
+                        metadata = {
+                            'title': doc.core_properties.title or '',
+                            'author': doc.core_properties.author or '',
+                            'subject': doc.core_properties.subject or '',
+                            'created': str(doc.core_properties.created) if doc.core_properties.created else '',
+                            'modified': str(doc.core_properties.modified) if doc.core_properties.modified else ''
+                        }
+                        
+                        structure = {
+                            'paragraphs': len(paragraphs),
+                            'tables': len(doc.tables),
+                            'sections': len(doc.sections),
+                            'extraction_method': 'python-docx'
+                        }
+                        
+                        logger.debug("Successfully extracted using python-docx")
+                        return {
+                            'text': text_content,
+                            'metadata': metadata,
+                            'structure': structure,
+                            'method': 'python-docx'
+                        }
+                except Exception as e:
+                    logger.warning("python-docx extraction failed", error=str(e))
+            
+            # Method 3: Try docx2txt as fallback
+            if docx2txt:
+                try:
+                    text_content = docx2txt.process(file_path)
+                    if text_content and len(text_content.strip()) > 0:
+                        logger.debug("Successfully extracted using docx2txt")
+                        return {
+                            'text': text_content,
+                            'metadata': {},
+                            'structure': {'extraction_method': 'docx2txt'},
+                            'method': 'docx2txt'
+                        }
+                except Exception as e:
+                    logger.warning("docx2txt extraction failed", error=str(e))
+            
+            # Method 4: Manual XML parsing as last resort
             try:
-                doc = Document(file_path)
-                metadata = {
-                    'title': doc.core_properties.title or '',
-                    'author': doc.core_properties.author or '',
-                    'subject': doc.core_properties.subject or '',
-                    'created': str(doc.core_properties.created) if doc.core_properties.created else '',
-                    'modified': str(doc.core_properties.modified) if doc.core_properties.modified else ''
-                }
-                
-                # Extract structure information
-                structure = {
-                    'paragraphs': len(doc.paragraphs),
-                    'tables': len(doc.tables),
-                    'sections': len(doc.sections)
-                }
-                
+                return await self._extract_docx_manually(file_path, content)
             except Exception as e:
-                logger.warning("Failed to extract DOCX metadata", error=str(e))
-                metadata = {}
-                structure = {}
-            
-            return {
-                'text': text_content,
-                'metadata': metadata,
-                'structure': structure,
-                'method': 'mammoth+python-docx',
-                'html_content': html_content
-            }
-            
+                logger.error("Manual DOCX extraction failed", error=str(e))
+                raise ValueError(f"Failed to extract text from DOCX: All methods failed")
+                
         except Exception as e:
-            logger.error("DOCX extraction failed", error=str(e))
-            # Fallback to simpler extraction
-            try:
-                text = docx2txt.process(file_path)
-                return {
-                    'text': text,
-                    'metadata': {},
-                    'structure': {},
-                    'method': 'docx2txt'
+            logger.error("DOCX extraction completely failed", error=str(e))
+            raise ValueError(f"Failed to extract text from DOCX: {str(e)}")
+    
+    async def _extract_docx_manually(self, file_path: str, content: bytes = None) -> Dict[str, Any]:
+        """Manually extract text from DOCX by parsing XML."""
+        try:
+            logger.debug("Attempting manual DOCX extraction")
+            
+            if content is None:
+                with open(file_path, 'rb') as f:
+                    content = f.read()
+            
+            with zipfile.ZipFile(io.BytesIO(content), 'r') as zip_file:
+                # Read the main document
+                document_xml = zip_file.read('word/document.xml')
+                
+                # Parse XML
+                root = ET.fromstring(document_xml)
+                
+                # Define namespaces
+                namespaces = {
+                    'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
                 }
-            except:
-                raise ValueError(f"Failed to extract text from DOCX: {str(e)}")
+                
+                # Extract text from paragraphs
+                paragraphs = []
+                for para in root.findall('.//w:p', namespaces):
+                    para_text = ''
+                    for text_elem in para.findall('.//w:t', namespaces):
+                        if text_elem.text:
+                            para_text += text_elem.text
+                    
+                    if para_text.strip():
+                        paragraphs.append(para_text.strip())
+                
+                text_content = '\n\n'.join(paragraphs)
+                
+                if text_content and len(text_content.strip()) > 0:
+                    logger.debug("Successfully extracted using manual XML parsing")
+                    return {
+                        'text': text_content,
+                        'metadata': {},
+                        'structure': {
+                            'paragraphs': len(paragraphs),
+                            'extraction_method': 'manual_xml'
+                        },
+                        'method': 'manual_xml'
+                    }
+                else:
+                    raise ValueError("No text content found in DOCX")
+                    
+        except Exception as e:
+            logger.error("Manual DOCX extraction failed", error=str(e))
+            raise
     
     async def _extract_from_pdf(self, file_path: str) -> Dict[str, Any]:
-        """Extract text from PDF file."""
+        """Extract text from PDF file with fallback."""
         try:
             logger.debug("Extracting from PDF")
+            
+            if not fitz:
+                raise ImportError("PyMuPDF not available for PDF processing")
             
             # Open PDF with PyMuPDF
             doc = fitz.open(file_path)
@@ -313,6 +445,9 @@ class FileHandler:
         try:
             logger.debug("Extracting from EPUB")
             
+            if not epub or not ebooklib:
+                raise ImportError("ebooklib not available for EPUB processing")
+            
             # Open EPUB with ebooklib
             book = epub.read_epub(file_path)
             
@@ -369,43 +504,30 @@ class FileHandler:
             raise ValueError(f"Failed to extract text from EPUB: {str(e)}")
     
     async def _extract_from_text(self, content: bytes) -> Dict[str, Any]:
-        """Extract text from plain text file."""
+        """Extract text from plain text file with robust encoding detection."""
         try:
             logger.debug("Extracting from text file")
             
-            # Detect encoding
-            detected = chardet.detect(content)
-            encoding = detected.get('encoding', 'utf-8')
-            confidence = detected.get('confidence', 0)
+            # Detect encoding with multiple methods
+            encoding = self._detect_encoding(content)
             
-            logger.debug("Encoding detected", encoding=encoding, confidence=confidence)
+            logger.debug("Encoding detected", encoding=encoding)
             
             # Decode text
-            try:
-                text = content.decode(encoding)
-            except UnicodeDecodeError:
-                # Fallback encodings
-                for fallback_encoding in ['utf-8', 'latin1', 'cp1252']:
-                    try:
-                        text = content.decode(fallback_encoding)
-                        encoding = fallback_encoding
-                        break
-                    except UnicodeDecodeError:
-                        continue
-                else:
-                    # Last resort: decode with errors ignored
-                    text = content.decode('utf-8', errors='ignore')
-                    encoding = 'utf-8 (with errors ignored)'
+            text = self._decode_with_fallback(content, encoding)
+            
+            # Clean and normalize text
+            text = self._normalize_text(text)
             
             # Basic structure analysis
             lines = text.split('\n')
-            paragraphs = text.split('\n\n')
+            paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
             
             structure = {
                 'lines': len(lines),
-                'paragraphs': len([p for p in paragraphs if p.strip()]),
+                'paragraphs': len(paragraphs),
                 'encoding': encoding,
-                'encoding_confidence': confidence
+                'encoding_confidence': self._get_encoding_confidence(content, encoding)
             }
             
             return {
@@ -419,17 +541,88 @@ class FileHandler:
             logger.error("Text extraction failed", error=str(e))
             raise ValueError(f"Failed to extract text: {str(e)}")
     
+    def _detect_encoding(self, content: bytes) -> str:
+        """Detect encoding using multiple methods."""
+        # Method 1: Check for BOM
+        if content.startswith(b'\xef\xbb\xbf'):
+            return 'utf-8-sig'
+        elif content.startswith(b'\xff\xfe'):
+            return 'utf-16-le'
+        elif content.startswith(b'\xfe\xff'):
+            return 'utf-16-be'
+        
+        # Method 2: Use chardet
+        try:
+            detected = chardet.detect(content)
+            if detected and detected.get('confidence', 0) > 0.7:
+                return detected['encoding']
+        except:
+            pass
+        
+        # Method 3: Try common encodings
+        common_encodings = ['utf-8', 'utf-16', 'latin1', 'cp1252', 'iso-8859-1']
+        for encoding in common_encodings:
+            try:
+                content.decode(encoding)
+                return encoding
+            except UnicodeDecodeError:
+                continue
+        
+        # Fallback
+        return 'utf-8'
+    
+    def _decode_with_fallback(self, content: bytes, primary_encoding: str) -> str:
+        """Decode content with fallback encodings."""
+        encodings_to_try = [primary_encoding, 'utf-8', 'latin1', 'cp1252', 'iso-8859-1']
+        
+        for encoding in encodings_to_try:
+            try:
+                return content.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        
+        # Last resort: decode with errors ignored
+        return content.decode('utf-8', errors='ignore')
+    
+    def _get_encoding_confidence(self, content: bytes, encoding: str) -> float:
+        """Get confidence score for encoding detection."""
+        try:
+            detected = chardet.detect(content)
+            if detected and detected.get('encoding', '').lower() == encoding.lower():
+                return detected.get('confidence', 0.5)
+        except:
+            pass
+        return 0.5
+    
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text content."""
+        # Replace various whitespace characters
+        text = re.sub(r'\r\n', '\n', text)  # Windows line endings
+        text = re.sub(r'\r', '\n', text)    # Old Mac line endings
+        
+        # Normalize unicode characters
+        import unicodedata
+        text = unicodedata.normalize('NFKC', text)
+        
+        # Remove excessive whitespace
+        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)  # Multiple blank lines
+        text = re.sub(r' +', ' ', text)  # Multiple spaces
+        
+        # Remove control characters except newlines and tabs
+        text = ''.join(char for char in text if ord(char) >= 32 or char in '\n\t')
+        
+        return text.strip()
+    
     async def _extract_from_html(self, content: bytes) -> Dict[str, Any]:
-        """Extract text from HTML file."""
+        """Extract text from HTML file with improved parsing."""
         try:
             logger.debug("Extracting from HTML")
             
             # Detect encoding
-            detected = chardet.detect(content)
-            encoding = detected.get('encoding', 'utf-8')
+            encoding = self._detect_encoding(content)
             
             # Decode HTML
-            html_text = content.decode(encoding)
+            html_text = self._decode_with_fallback(content, encoding)
             
             # Parse with BeautifulSoup
             soup = BeautifulSoup(html_text, 'html.parser')
@@ -450,10 +643,12 @@ class FileHandler:
             
             # Extract text content
             # Remove script and style elements
-            for script in soup(["script", "style"]):
+            for script in soup(["script", "style", "nav", "footer", "header"]):
                 script.decompose()
             
+            # Get text with better formatting
             text = soup.get_text('\n', strip=True)
+            text = self._normalize_text(text)
             
             # Structure analysis
             structure = {
@@ -492,7 +687,7 @@ class FileHandler:
             raise
     
     async def validate_file(self, file, max_size: Optional[int] = None) -> Dict[str, Any]:
-        """Validate uploaded file."""
+        """Validate uploaded file with comprehensive checks."""
         try:
             # Check file size
             content = await file.read()
@@ -503,6 +698,13 @@ class FileHandler:
                 return {
                     'valid': False,
                     'error': f'File too large: {file_size} bytes (max: {max_allowed})'
+                }
+            
+            # Check for empty file
+            if file_size == 0:
+                return {
+                    'valid': False,
+                    'error': 'File is empty'
                 }
             
             # Check content type
@@ -520,6 +722,36 @@ class FileHandler:
                     'error': 'File failed security checks'
                 }
             
+            # Try to extract a small sample to verify file integrity
+            try:
+                # Create a temporary file for testing
+                temp_file_id = str(uuid.uuid4())
+                temp_path = os.path.join(self.settings.TEMP_DIR, f"test_{temp_file_id}")
+                
+                with open(temp_path, 'wb') as f:
+                    f.write(content[:min(1024*1024, len(content))])  # First 1MB for testing
+                
+                # Try to extract text (limited)
+                test_result = await self._extract_by_type(content[:1024*100], temp_path, detected_type, file.filename)
+                
+                # Clean up test file
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+                
+                if not test_result.get('text'):
+                    return {
+                        'valid': False,
+                        'error': 'File appears to be corrupted or contains no extractable text'
+                    }
+                    
+            except Exception as e:
+                return {
+                    'valid': False,
+                    'error': f'File integrity check failed: {str(e)}'
+                }
+            
             return {
                 'valid': True,
                 'file_size': file_size,
@@ -535,9 +767,9 @@ class FileHandler:
             }
     
     def _is_potentially_malicious(self, content: bytes, filename: str) -> bool:
-        """Basic malicious content detection."""
+        """Enhanced malicious content detection."""
         # Check for suspicious file extensions
-        suspicious_extensions = ['.exe', '.bat', '.cmd', '.scr', '.vbs', '.jar']
+        suspicious_extensions = ['.exe', '.bat', '.cmd', '.scr', '.vbs', '.jar', '.com', '.pif']
         if any(filename.lower().endswith(ext) for ext in suspicious_extensions):
             return True
         
@@ -545,9 +777,28 @@ class FileHandler:
         if content.startswith(b'MZ'):  # PE executable
             return True
         
-        # Check for script content in non-script files
-        if b'<script' in content.lower() and not filename.lower().endswith('.html'):
+        if content.startswith(b'\x7fELF'):  # ELF executable
             return True
+        
+        # Check for script content in non-script files
+        if b'<script' in content.lower() and not filename.lower().endswith(('.html', '.htm')):
+            return True
+        
+        # Check for suspicious patterns
+        suspicious_patterns = [
+            b'powershell',
+            b'cmd.exe',
+            b'system32',
+            b'<?php',
+            b'#!/bin/',
+            b'eval(',
+            b'exec(',
+        ]
+        
+        content_lower = content.lower()
+        for pattern in suspicious_patterns:
+            if pattern in content_lower and not filename.lower().endswith(('.txt', '.md', '.html', '.htm')):
+                return True
         
         return False
     

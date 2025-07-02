@@ -1,6 +1,6 @@
 """
-Pydantic models for API request/response validation.
-Defines data structures for the eBook Editor API endpoints.
+Enhanced Pydantic models for API request/response validation.
+Includes fixes for all response types and new AI configuration models.
 """
 
 from datetime import datetime
@@ -14,6 +14,26 @@ class BaseResponse(BaseModel):
     status: str = "success"
     timestamp: datetime = Field(default_factory=datetime.now)
     message: Optional[str] = None
+
+
+# Enhanced Health Check Models
+class SystemStats(BaseModel):
+    """System statistics model."""
+    memory_usage_percent: float = 0.0
+    cpu_usage_percent: float = 0.0
+    disk_usage_percent: float = 0.0
+
+
+class HealthResponse(BaseResponse):
+    """Enhanced health check response model."""
+    status: Literal["healthy", "degraded", "unhealthy"]
+    version: str
+    services: Dict[str, bool]
+    timestamp: float
+    uptime_seconds: float = 0.0
+    worker_id: Optional[int] = None
+    system_stats: Optional[SystemStats] = None
+    error: Optional[str] = None
 
 
 # Text Analysis Models
@@ -62,6 +82,7 @@ class ReadabilityScores(BaseModel):
         "very_easy", "easy", "fairly_easy", "standard", 
         "fairly_difficult", "difficult", "very_difficult"
     ]
+    reading_time_minutes: float = 0.0
 
 
 class StyleSuggestion(BaseModel):
@@ -91,39 +112,75 @@ class TextStatistics(BaseModel):
     word_count: int
     sentence_count: int
     paragraph_count: int
-    average_words_per_sentence: float
-    average_sentences_per_paragraph: float
-    lexical_diversity: float
-    common_words: List[str]
+    average_words_per_sentence: float = 0.0
+    average_sentences_per_paragraph: float = 0.0
+    lexical_diversity: float = 0.0
+    common_words: List[str] = []
+    complex_word_ratio: float = 0.0
+    unique_word_count: int = 0
 
 
 class StructureAnalysis(BaseModel):
     """Document structure analysis."""
     has_title: bool
     has_headings: bool
-    heading_structure: List[Dict[str, Any]]
-    paragraph_lengths: List[int]
-    sentence_lengths: List[int]
-    estimated_reading_time_minutes: float
+    heading_structure: List[Dict[str, Any]] = []
+    paragraph_count: int = 0
+    paragraph_lengths: List[int] = []
+    sentence_count: int = 0
+    sentence_lengths: List[int] = []
+    average_paragraph_length: float = 0.0
+    average_sentence_length: float = 0.0
+    estimated_reading_time_minutes: float = 0.0
+
+
+class SentimentAnalysis(BaseModel):
+    """Sentiment analysis results."""
+    overall_sentiment: Literal["positive", "negative", "neutral"]
+    overall_score: float = 0.0
+    positive_ratio: float = 0.0
+    negative_ratio: float = 0.0
+    neutral_ratio: float = 0.0
+
+
+class KeywordAnalysis(BaseModel):
+    """Keyword analysis results."""
+    top_keywords: List[List[Any]] = []  # List of [word, count] pairs
+    keyword_density: float = 0.0
+    named_entities: Dict[str, int] = {}
+    unique_keywords: int = 0
+    total_keywords: int = 0
+
+
+class LinguisticFeatures(BaseModel):
+    """Linguistic features analysis."""
+    pos_distribution: Dict[str, int] = {}
+    dependency_distribution: Dict[str, int] = {}
+    subordination_ratio: float = 0.0
+    average_dependency_distance: float = 0.0
+    linguistic_complexity_score: float = 0.0
 
 
 class TextAnalysisResponse(BaseResponse):
-    """Response model for text analysis."""
+    """Enhanced response model for text analysis."""
     statistics: TextStatistics
-    grammar_issues: List[GrammarIssue]
-    spelling_errors: List[SpellingError]
+    grammar_issues: List[GrammarIssue] = []
+    spelling_errors: List[SpellingError] = []
     readability_scores: ReadabilityScores
-    style_suggestions: List[StyleSuggestion]
-    ai_suggestions: Optional[List[AISuggestion]] = None
+    style_suggestions: List[StyleSuggestion] = []
+    ai_suggestions: Optional[List[AISuggestion]] = []
     structure_analysis: StructureAnalysis
-    overall_score: float = Field(ge=0.0, le=100.0)
-    improvement_areas: List[str]
+    sentiment_analysis: Optional[SentimentAnalysis] = None
+    keyword_analysis: Optional[KeywordAnalysis] = None
+    linguistic_features: Optional[LinguisticFeatures] = None
+    overall_score: float = Field(ge=0.0, le=100.0, default=50.0)
+    improvement_areas: List[str] = []
 
 
-# AI Configuration Models
+# Enhanced AI Configuration Models
 class AIConfigRequest(BaseModel):
-    """Request model for AI configuration."""
-    ai_type: Literal["local", "external"]
+    """Enhanced request model for AI configuration."""
+    ai_type: Literal["local", "external", "claude", "mistral", "openai"]
     model_name: Optional[str] = None
     api_endpoint: Optional[str] = None
     api_key: Optional[str] = None
@@ -132,11 +189,13 @@ class AIConfigRequest(BaseModel):
 
 
 class AIConfigResponse(BaseResponse):
-    """Response model for AI configuration."""
-    ai_type: Literal["local", "external"]
+    """Enhanced response model for AI configuration."""
+    ai_type: Literal["local", "external", "claude", "mistral", "openai"]
     model_name: str
     is_ready: bool
     capabilities: List[str] = []
+    endpoint: Optional[str] = None
+    model_info: Optional[Dict[str, Any]] = None
 
 
 # eBook Generation Models
@@ -165,6 +224,7 @@ class ChapterConfiguration(BaseModel):
 
 class FormatOptions(BaseModel):
     """eBook format options."""
+    format: Literal["epub", "pdf", "docx", "html", "txt"] = "epub"
     font_family: str = Field(default="Georgia")
     font_size: int = Field(default=12, ge=8, le=24)
     line_height: float = Field(default=1.5, ge=1.0, le=3.0)
@@ -213,16 +273,36 @@ class EBookGenerationResponse(BaseResponse):
 
 
 # File Processing Models
+class FileValidationResult(BaseModel):
+    """File validation result."""
+    valid: bool
+    error: Optional[str] = None
+    file_size: Optional[int] = None
+    detected_type: Optional[str] = None
+    original_type: Optional[str] = None
+
+
+class ExtractedContent(BaseModel):
+    """Extracted content from file."""
+    text: str
+    metadata: Dict[str, Any] = {}
+    structure: Dict[str, Any] = {}
+    images: List[Dict[str, Any]] = []
+    extraction_method: str = "unknown"
+
+
 class FileUploadResponse(BaseResponse):
-    """Response model for file upload."""
+    """Enhanced response model for file upload."""
     file_id: str
     filename: str
     content_type: str
-    file_size_bytes: int
+    file_size: int = Field(alias="file_size_bytes", default=0)
     text_content: str
     word_count: int
-    extracted_metadata: Dict[str, Any]
-    processing_status: Literal["completed", "processing", "failed"]
+    character_count: int = 0
+    extracted_metadata: Dict[str, Any] = Field(alias="analysis", default={})
+    processing_status: Literal["completed", "processing", "failed", "enhanced", "enhancing"]
+    extraction_method: str = "unknown"
 
 
 class BatchProcessingRequest(BaseModel):
@@ -239,24 +319,6 @@ class BatchProcessingResponse(BaseResponse):
     estimated_completion_time_minutes: int
 
 
-# Health and Status Models
-class ServiceStatus(BaseModel):
-    """Service status model."""
-    name: str
-    status: Literal["healthy", "degraded", "unhealthy"]
-    last_check: datetime
-    details: Optional[Dict[str, Any]] = None
-
-
-class HealthResponse(BaseResponse):
-    """Health check response model."""
-    status: Literal["healthy", "degraded", "unhealthy"]
-    version: str
-    uptime_seconds: float
-    services: Dict[str, bool]
-    error: Optional[str] = None
-
-
 # Chat and AI Models
 class ChatMessage(BaseModel):
     """Chat message model."""
@@ -267,7 +329,7 @@ class ChatMessage(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     """Chat completion request model (OpenAI compatible)."""
-    model: str
+    model: str = "default"
     messages: List[ChatMessage]
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=1, le=4096)
@@ -313,7 +375,7 @@ class WritingAnalytics(BaseModel):
     ai_suggestions_rejected: int
     readability_improvement: float
     writing_speed_wpm: float
-    most_common_errors: List[str]
+    most_common_errors: List[str] = []
 
 
 class ProjectProgress(BaseModel):
@@ -324,8 +386,8 @@ class ProjectProgress(BaseModel):
     current_word_count: int
     completion_percentage: float
     estimated_completion_date: Optional[datetime]
-    daily_writing_goals: Dict[str, int]
-    writing_streaks: int
+    daily_writing_goals: Dict[str, int] = {}
+    writing_streaks: int = 0
 
 
 class PerformanceMetrics(BaseModel):
@@ -338,8 +400,34 @@ class PerformanceMetrics(BaseModel):
     cpu_usage_percent: float
 
 
-# Validation helpers
-@validator("text", pre=True)
+# Enhanced Available Models Response
+class AvailableModelsResponse(BaseModel):
+    """Response model for available models endpoint."""
+    local_models: List[str] = []
+    current_model: Optional[str] = None
+    supported_formats: List[str] = []
+    ai_service_available: bool = False
+    text_processor_available: bool = False
+    error: Optional[str] = None
+
+
+# Text Improvement Models
+class TextImprovementRequest(BaseModel):
+    """Request model for text improvement."""
+    text: str = Field(..., min_length=1, max_length=10000)
+    improvement_type: Literal["readability", "formal", "casual", "concise", "detailed", "academic", "general"] = "general"
+
+
+class TextImprovementResponse(BaseModel):
+    """Response model for text improvement."""
+    original: str
+    improved: str
+    improvement_type: str
+    changes_made: List[str] = []
+
+
+# Enhanced validation helpers
+@validator("text", pre=True, allow_reuse=True)
 def validate_text_content(cls, v):
     """Validate text content."""
     if not isinstance(v, str):
@@ -349,14 +437,51 @@ def validate_text_content(cls, v):
     return v.strip()
 
 
+# Custom validators
+@validator("confidence", allow_reuse=True)
+def validate_confidence(cls, v):
+    """Validate confidence score."""
+    if not isinstance(v, (int, float)):
+        raise ValueError("Confidence must be a number")
+    if not 0.0 <= v <= 1.0:
+        raise ValueError("Confidence must be between 0 and 1")
+    return float(v)
+
+
 # Export all models
 __all__ = [
+    # Base models
+    "BaseResponse",
+    
+    # Health check models
+    "SystemStats", "HealthResponse",
+    
+    # Text analysis models
     "TextAnalysisRequest", "TextAnalysisResponse",
-    "AIConfigRequest", "AIConfigResponse", 
+    "GrammarIssue", "SpellingError", "ReadabilityScores",
+    "StyleSuggestion", "AISuggestion", "TextStatistics",
+    "StructureAnalysis", "SentimentAnalysis", "KeywordAnalysis",
+    "LinguisticFeatures",
+    
+    # AI configuration models
+    "AIConfigRequest", "AIConfigResponse",
+    
+    # eBook generation models
     "EBookGenerationRequest", "EBookGenerationResponse",
     "EBookMetadata", "FormatOptions", "ChapterConfiguration",
-    "AIEnhancementOptions", "FileUploadResponse",
+    "AIEnhancementOptions",
+    
+    # File processing models
+    "FileValidationResult", "ExtractedContent", "FileUploadResponse",
     "BatchProcessingRequest", "BatchProcessingResponse",
-    "HealthResponse", "ChatCompletionRequest", "ChatCompletionResponse",
-    "WritingAnalytics", "ProjectProgress", "PerformanceMetrics"
+    
+    # Chat models
+    "ChatMessage", "ChatCompletionRequest", "ChatCompletionResponse",
+    "ChatCompletionChoice", "ChatCompletionUsage",
+    
+    # Analytics models
+    "WritingAnalytics", "ProjectProgress", "PerformanceMetrics",
+    
+    # Other models
+    "AvailableModelsResponse", "TextImprovementRequest", "TextImprovementResponse"
 ]
