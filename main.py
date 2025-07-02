@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
 import uvicorn
+import argparse
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -486,11 +487,18 @@ async def general_exception_handler(request, exc):
 
 if __name__ == "__main__":
     # Run the application
+    parser = argparse.ArgumentParser(description="Run the eBook Editor API")
+    parser.add_argument("--host",    default=settings.HOST, help="Host to bind to")
+    parser.add_argument("--port", type=int, default=settings.PORT, help="Port to bind to")
+    parser.add_argument("--reload",  action="store_true", help="Enable auto-reload (overrides DEBUG)")
+    parser.add_argument("--workers", type=int, default=settings.MAX_WORKERS, help="Number of worker processes")
+    args = parser.parse_args()
+
     uvicorn.run(
         "main:app",
-        host=settings.HOST,
-        port=settings.PORT,
-        reload=settings.DEBUG,
+        host=args.host,
+        port=args.port,
+        reload=args.reload or settings.DEBUG,
         log_level=settings.LOG_LEVEL.lower(),
-        workers=1 if settings.DEBUG else settings.MAX_WORKERS
+        workers=args.workers
     )

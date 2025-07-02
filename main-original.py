@@ -6,14 +6,16 @@ Provides REST API endpoints for text processing, AI integration, and eBook gener
 import asyncio
 import logging
 import sys
+import os
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, BackgroundTasks
+import argparse
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import structlog
@@ -85,7 +87,9 @@ async def lifespan(app: FastAPI):
         
     except Exception as e:
         logger.error("Failed to initialize services", error=str(e))
-        sys.exit(1)
+        # Don't exit in development mode
+        if not settings.DEBUG:
+            sys.exit(1)
     
     yield
     
@@ -118,9 +122,8 @@ app.add_middleware(
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
-
+# Mount API routes first (higher priority)
+# All API routes are under /api/ or /docs, /redoc, /health
 
 # Dependency to get services
 async def get_ai_service() -> AIService:
@@ -424,11 +427,41 @@ async def batch_process_files(
         raise HTTPException(status_code=500, detail=f"Batch processing failed: {str(e)}")
 
 
-# Serve the frontend
-@app.get("/")
-async def serve_frontend():
-    """Serve the enhanced frontend application."""
-    return {"message": "eBook Editor Pro API", "docs": "/docs"}
+# Static file serving for React build
+# Check if build directory exists
+build_dir = os.path.join(os.path.dirname(__file__), "frontend", "build")
+if os.path.exists(build_dir):
+    # Serve static files from build directory
+    app.mount("/static", StaticFiles(directory=os.path.join(build_dir, "static")), name="static")
+    
+    # Serve React app for all non-API routes
+    @app.get("/{full_path:path}")
+    async def serve_react_app(request: Request, full_path: str):
+        """Serve React app for all routes that are not API endpoints."""
+        # Don't serve React app for API routes
+        if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc") or full_path == "health":
+            raise HTTPException(status_code=404, detail="Not found")
+        
+        # Serve index.html for all other routes (React Router will handle routing)
+        return FileResponse(os.path.join(build_dir, "index.html"))
+else:
+    # Development mode - serve development message
+    @app.get("/")
+    async def serve_development():
+        """Development mode - instructions for building frontend."""
+        return {
+            "message": "eBook Editor Pro API - Development Mode",
+            "frontend_status": "Frontend not built. Run 'cd frontend && npm run build' to build the React app.",
+            "api_docs": "/docs",
+            "health_check": "/health",
+            "instructions": {
+                "1": "Install Node.js and npm",
+                "2": "cd frontend",
+                "3": "npm install",
+                "4": "npm run build",
+                "5": "Restart the Python server"
+            }
+        }
 
 
 # Error handlers
