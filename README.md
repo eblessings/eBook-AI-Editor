@@ -55,6 +55,7 @@ eBook Editor Pro is a comprehensive, AI-powered platform for creating profession
 - **Python 3.8+** (recommended: Python 3.11+)
 - **Git** for cloning the repository
 - **4GB+ RAM** (8GB+ recommended for AI features)
+
 - **2GB+ disk space** for models and dependencies
 
 ### 1. Installation
@@ -67,6 +68,9 @@ sudo apt update
 sudo apt install libxcb-cursor0
 wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
 sudo apt install libmagic1 libmagic-dev
+sudo apt install default-jre
+pip install spacy
+python -m spacy download en_core_web_sm
 
 
 # Run the automated setup
