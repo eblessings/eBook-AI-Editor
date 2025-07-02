@@ -12,3 +12,67 @@ venv/
 *.log
 #models
 model_cache/
+
+
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Build files
+/build/
+/dist/
+/.next/
+/out/
+
+# Cache
+/.cache
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Environment variables
+.env*.local
+.env
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS-generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Testing
+/coverage
+/.nyc_output
+
+# Debug logs
+*.log
+
+.eslintcache
+.prettierignore
+
+/__snapshots__/
+
+
+docker-compose*.yml
+Dockerfile
+
+#Directories
+uploads/
+exports/
+
